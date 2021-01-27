@@ -3,10 +3,6 @@ title: "Avocado Price Prediction - Ensemble Model"
 authors: "Danni Zhou"
 date: "March 28, 2020"
 ---
-```{r}
-# Source: http://www.htmlwidgets.org/showcase_plotly.html
-library(plotly)
-```
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
