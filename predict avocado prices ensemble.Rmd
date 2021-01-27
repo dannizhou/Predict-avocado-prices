@@ -1,14 +1,7 @@
 ---
-title: "Avocado Price Prediction - Individual Submission"
-authors: "Group 2 - Danni Zhou"
+title: "Avocado Price Prediction - Ensemble Model"
+authors: "Danni Zhou"
 date: "March 28, 2020"
-output:
-  word_document: default
-  pdf_document:
-    latex_engine: xelatex
-geometry: margin=2.3cm
-abstract: We ate some avocados.
-urlcolor: blue
 ---
 
 
@@ -17,7 +10,6 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 # Dataset and Processing 
-(Thomas wrote this chunk merging the datasets - and the entire group used it)
 ```{r libraries, message=FALSE, warning=FALSE, echo=FALSE}
 #Load Libraries
 library(tidyverse)
