@@ -1,0 +1,314 @@
+---
+title: "Avocado Price Prediction - Individual Submission"
+authors: "Group 2 - Danni Zhou"
+date: "March 28, 2020"
+output:
+  word_document: default
+  pdf_document:
+    latex_engine: xelatex
+geometry: margin=2.3cm
+abstract: We ate some avocados.
+urlcolor: blue
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Dataset and Processing 
+(Thomas wrote this chunk merging the datasets - and the entire group used it)
+```{r libraries, message=FALSE, warning=FALSE, echo=FALSE}
+#Load Libraries
+library(tidyverse)
+library(skimr)
+library(visdat)
+
+#Load Weather Data
+weather_data <- read_csv('weather_data.csv') #change to your directory
+
+#Create join_date from Year+Day of Year (DOY)
+weather_data <- weather_data %>% mutate(join_date = as.Date(strptime(paste(YEAR, DOY), format="%Y %j")))
+
+#Load Avocado Data
+avocado <- read_csv('Avocado.csv') #change to your directory
+
+#Filter "regions" that aren't cities
+avocado <- avocado %>% filter (!region %in% c('Midsouth','Northeast','SouthCentral','Southeast','TotalUS','West'))
+
+#Offset Date by -7 [days] for shipping as join_date
+avocado <- avocado %>% mutate(join_date = `Date` - 7)
+
+#merge dataset
+final <- inner_join(avocado, weather_data, by = "join_date") 
+
+#select relevent columns 
+final <- final %>% select("join_date","AveragePrice","Total Volume","4046","4225","4770","Total Bags"
+                          ,"Small Bags","Large Bags","XLarge Bags","type","region","Distance (km)"
+                          ,"T2M_RANGE","T2MDEW","T2MWET","T2M_MAX","T2M_MIN"
+                          ,"T2M","PRECTOT","RH2M","PS","WS2M","ALLSKY_SFC_SW_DWN")
+
+#rename for ease of use
+final <- final %>% rename(ship_date = join_date
+                         ,average_price = AveragePrice
+                         ,total_volume = `Total Volume`
+                         ,sku_4046 = `4046`
+                         ,sku_4225 = `4225`
+                         ,sku_4770 = `4770`
+                         ,total_bags = `Total Bags`
+                         ,small_bags = `Small Bags`
+                         ,large_bags = `Large Bags` 
+                         ,xlarge_bags = `XLarge Bags`
+                         ,distance_km = `Distance (km)`
+                         ,daily_temp_range= T2M_RANGE
+                         ,daily_dew_point = T2MDEW
+                         ,daily_wet_bulb = T2MWET
+                         ,daily_max_temp = T2M_MAX
+                         ,daily_min_temp = T2M_MIN
+                         ,daily_avg_temp = T2M
+                         ,daily_precip_mm = PRECTOT
+                         ,daily_relative_humidity = RH2M
+                         ,daily_surface_pressure = PS
+                         ,daily_wind_speed = WS2M
+                         ,daily_sky_insolation = ALLSKY_SFC_SW_DWN)
+
+
+#run visdat, confirm no NA values
+#vis_dat(final)
+
+#run skim, alternative to str()
+skim(final)
+```
+
+
+# Model Development
+
+1. Preparation
+```{r newchunk, echo=FALSE}
+final <- as.data.frame(final)
+final$type <- as.factor(final$type)#converting categorical variables into factor variables
+final$region <- as.factor(final$region)
+
+n_final <- final
+n_final$ship_date <- as.numeric(n_final$ship_date)#converting date variable into numerical variable
+str(n_final)
+```
+
+Feature Selection
+```{r}
+library(leaps)
+subsets<-regsubsets(average_price~.-region,data=n_final, nbest=1,nvmax=10)   
+sub.sum <- summary(subsets)
+as.data.frame(sub.sum$outmat)
+#I ended up not removing any varibles at this stage, because I wanted to see how many variables will be left after removing the highly correlated.
+```
+
+Removing "organic" avocados
+```{r}
+nonorganic <- n_final[n_final$type=="conventional",-11]
+#The group decided to only include "conventional" type of avocados in the project model because:
+#1. The dataset was too large and we wanted to reduce its size.
+#2. It is expected that organic fruits are consistently more expensive than its non-organic counterparts in almost all cases, so we did not consider this as an interesting point to investigate. 
+#3. Our major interests in the dataset are shipping distance and weather in the area that produced avocados, we reckoned that including the "type" variable would be distracting.
+```
+
+Remove highly correlated variables
+```{r}
+numericCon <- nonorganic[,-11]#removing region as it's not numerical
+
+correlationMatrix <- cor(numericCon, method = "pearson")
+
+library(corrplot)
+col <- colorRampPalette(c("#BB4444", "#EE9988", "#FFFFFF", "#77AADD", "#4477AA"))
+corrplot(correlationMatrix, method="color", col=col(200),
+         type="upper", order="hclust",
+         tl.col="black", tl.srt=45, tl.cex= 0.7,
+         sig.level = 0.01,
+         diag=FALSE)
+
+library(lattice)
+library(caret)
+highlyCorrelated <- findCorrelation(correlationMatrix, cutoff=0.7)
+print(highlyCorrelated)
+nonorganic <- nonorganic[,-highlyCorrelated]#removing highly correlated variables
+nonorganic <- nonorganic[,-7]#because each region has a fixed distance, the distance_km variable already captures the information. Thus I removed the region variable because it is redundant.
+str(nonorganic)
+```
+
+Visualization
+```{r}
+hist(nonorganic$average_price,
+     main = "Price Distribution",
+     xlab="Average price",
+     xlim=c(0,2.5),
+     breaks = 100,
+     col = "grey")
+
+plot(nonorganic$average_price, nonorganic$distance_km, 
+     main = " Relationship between average price and distance", 
+     xlab = "Average Price", 
+     ylab = "Distance",
+     pch = 20,
+     cex = 0.5,
+     col = "black")
+
+boxplot(average_price~distance_km, data = nonorganic,
+        col = rainbow(47))
+
+
+library(ggplot2)
+ggplot(final, aes(x = average_price)) +
+  geom_density(aes(group=type, col=type))
+```
+2. Linear regression model
+```{r}
+set.seed(123)
+Train <- sample(nrow(nonorganic), floor(nrow(nonorganic)*0.7))
+train <- nonorganic[Train,]
+test <- nonorganic[-Train,]
+
+model_mlr <- lm(average_price~., data=nonorganic)
+summary(model_mlr)
+```
+
+Predicting the model
+```{r}
+prediction <- predict(model_mlr, newdata=nonorganic)
+errors <- prediction - test$average_price
+hist(errors)
+rmse <- sqrt(mean((test$average_price - prediction)^2))
+rmse
+rel_change <- abs(errors) / test$average_price
+pred01 <- table(rel_change<0.01)["TRUE"] / nrow(test)
+
+paste("RMSE:", rmse)
+paste("PRED(01):", round(pred01,2))
+```
+
+3. Classifier models
+```{r}
+set.seed(123)
+classFinal <- nonorganic
+average_price <- classFinal$average_price
+
+average_price <- ifelse(classFinal$average_price<=1.1,"low","high")
+
+classFinal$average_price <- as.factor(average_price)
+str(classFinal)
+```
+
+```{r}
+set.seed(123)
+Train <- sample(nrow(classFinal),as.integer(nrow(classFinal)*0.70))
+final_train = classFinal[Train,]
+final_test = classFinal[-Train,-2]
+train_labels_final <- classFinal[Train,2]
+test_labels_final <- classFinal[-Train,2]
+```
+
+Random Forest
+```{r}
+library(caret)
+ctrl <- trainControl(method="repeatedcv", number =10, repeats=3)
+set.seed(123)
+RFmodel_final <- train(average_price ~ ., data= final_train, method="rf", ntree=500, trControl = ctrl)
+test_predRF_final <- predict(RFmodel_final, final_test)
+
+cf_RF_final <- confusionMatrix(as.factor(test_predRF_final), as.factor(test_labels_final), positive="high" , mode = "everything")
+print(cf_RF_final)
+
+```
+
+SVM
+```{r}
+set.seed(123)
+SVMmodel <- train(average_price ~ ., data= final_train, method="svmPoly", trControl = ctrl)
+test_predSVM <- predict(SVMmodel, final_test)
+cf_SVM <- confusionMatrix(as.factor(test_predSVM), as.factor(test_labels_final), mode = "everything")
+print(cf_SVM)
+```
+
+Naive Bayes
+```{r}
+set.seed(123)
+NBmodel <- train(average_price ~ ., data= final_train, method="naive_bayes", trControl = ctrl)
+test_predNB <- predict(NBmodel, final_test)
+cf_NB <- confusionMatrix(as.factor(test_predNB), as.factor(test_labels_final), mode = "everything")
+print(cf_NB)
+```
+
+Logistic regression
+```{r}
+set.seed(123)
+LRmodel <- train(average_price ~ ., data= final_train, method="glm", trControl = ctrl)
+test_predLR <- predict(LRmodel, final_test)
+cf_LR <- confusionMatrix(as.factor(test_predLR), as.factor(test_labels_final), positive="high" , mode = "everything")
+print(cf_LR)
+```
+
+Ensemble model
+```{r}
+library(caret)
+library(ggplot2)
+library(purrr)
+library(kernlab)
+library(caretEnsemble)
+control <- trainControl(method="repeatedcv", number = 10, repeats=3, savePredictions="final", classProbs=TRUE)
+algorithmList <- c('rf', 'svmPoly', 'glm', 'naive_bayes')
+set.seed(123)
+models_final <- caretList(average_price~., data=final_train, trControl=control, methodList=algorithmList)
+set.seed(123)
+results_final <- resamples(models_final)
+summary(results_final)
+dotplot(results_final)
+modelCor(results_final)
+```
+
+```{r}
+stackControl <- trainControl(method="repeatedcv", number=10, repeats=3, savePredictions=TRUE, classProbs=TRUE)
+set.seed(123)
+stack.rf <- caretStack(models_final, method="rf", metric="Accuracy", trControl=stackControl)
+print(stack.rf)
+```
+
+4. KNN regression
+```{r}
+library(FNN)
+set.seed(123)
+norg_train <- sample(nrow(nonorganic), floor(nrow(nonorganic)*0.7))
+train <- nonorganic[norg_train,]
+test <- nonorganic[-norg_train,]
+train_labelsKNN <- train[,2]
+test_labelsKNN <- test[,2]
+train_KNN <- train[,-2]
+test_KNN <- test[,-2]
+set.seed(123)
+
+ x <- 0
+for (i in 1:sqrt(nrow(train_KNN)))
+{
+set.seed(123)
+KNNmodel <- knn.reg(train =train_KNN , test = test_KNN, y = train_labelsKNN , k = i)
+predicted <- KNNmodel$pred
+rmse <- sqrt(mean((test_labelsKNN-predicted)^2))
+x[i] <- rmse
+#print(paste(i,rmse))
+}
+
+plot(x, type="l", col="red")
+which.min(x)
+
+newKNNmodel <- knn.reg(train =train_KNN , test = test_KNN, y = train_labelsKNN , k = 12)
+predicted <- newKNNmodel$pred
+#plot(test_labelsKNN, predicted, xlab="y", ylab=expression(hat(y)))
+errors <- predicted - test_labelsKNN
+rmse <- sqrt(mean((test_labelsKNN-predicted)^2))
+rmse
+rel_change <- abs(errors) / test_labelsKNN
+pred01 <- table(rel_change<0.01)["TRUE"] / nrow(test_KNN)
+pred01
+```
+#Conclusion
+
+I used 12 variables to predict the average_price of non-organic avocados, among which distance_km, ship_date and large_bags (sold) are the most important features. I slipt the average_price of the training dataset into two classes with a cutoff line at 1.1.
+Among individual classifiers, random forest model performed the best with an accuracy rate of 88%. Caretlist also returned random forest as the best method. Thus I used random forest to ensemble the 4 models and resulted in an accuracy rate of 89%. 
